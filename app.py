@@ -12,7 +12,7 @@ from model import run_clustering
 app = FastAPI()
 
 
-# ✅ HOME PAGE
+# ✅ HOME PAGE (FIXED)
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse("""
@@ -42,43 +42,58 @@ def home():
     """)
 
 
-# ✅ RESULT PAGE
+# ✅ RESULT PAGE (SAFE + FINAL)
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(file: UploadFile = File(...)):
 
-    df = pd.read_csv(file.file)
+    try:
+        # ✅ SAFE FILE READ (important for deployment)
+        contents = await file.read()
+        df = pd.read_csv(BytesIO(contents))
 
-    # Preprocess
-    X_pca, df_processed = preprocess_data(df)
+        # Preprocess
+        X_pca, df_processed = preprocess_data(df)
 
-    # Clustering
-    labels, best_k, score = run_clustering(X_pca)
+        # Clustering
+        labels, best_k, score = run_clustering(X_pca)
 
-    if len(labels) != len(df_processed):
-        return HTMLResponse("<h2>Error: Label size mismatch</h2>")
+        if len(labels) != len(df_processed):
+            return HTMLResponse("<h2>Error: Label size mismatch</h2>")
 
-    df_processed["Cluster"] = labels
+        df_processed["Cluster"] = labels
 
-    # Table
-    summary = df_processed.groupby("Cluster").mean().to_html(
-        classes="table table-dark table-hover table-bordered"
-    )
+        # Table
+        summary = df_processed.groupby("Cluster").mean().to_html(
+            classes="table table-dark table-hover table-bordered"
+        )
 
-    # Graph
-    plt.figure()
-    plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
-    plt.title("Customer Segmentation")
+        # Graph
+        plt.figure()
+        plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
+        plt.title("Customer Segmentation")
 
-    buffer = BytesIO()
-    plt.savefig(buffer, format="png")
-    buffer.seek(0)
-    image_base64 = base64.b64encode(buffer.read()).decode()
+        buffer = BytesIO()
+        plt.savefig(buffer, format="png")
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.read()).decode()
 
-    # Insights
-    insights = df_processed.groupby("Cluster").mean()
+        # Insights
+        insights = df_processed.groupby("Cluster").mean()
 
-    high_spender = insights["SpendingScore"].idxmax() if "SpendingScore" in insights.columns else "N/A"
-    low_spender = insights["SpendingScore"].idxmin() if "SpendingScore" in insights.columns else "N/A"
+        high_spender = insights["SpendingScore"].idxmax() if "SpendingScore" in insights.columns else "N/A"
+        low_spender = insights["SpendingScore"].idxmin() if "SpendingScore" in insights.columns else "N/A"
+
+    except Exception as e:
+        return HTMLResponse(f"""
+        <html>
+        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;">
+            <h2>⚠️ Error Processing File</h2>
+            <p>{str(e)}</p>
+            <br>
+            <a href="/" style="color:white;">⬅ Go Back</a>
+        </body>
+        </html>
+        """)
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -132,7 +147,6 @@ async def upload(file: UploadFile = File(...)):
                 margin-bottom: 25px;
             }}
 
-            /* KPI CARDS */
             .kpi-card {{
                 padding: 20px;
                 border-radius: 15px;
@@ -174,7 +188,6 @@ async def upload(file: UploadFile = File(...)):
         <h1>📊 Analytics Dashboard</h1>
         <p>Customer Segmentation Insights</p>
 
-        <!-- ✅ KPI CARDS -->
         <div class="row mt-4">
 
             <div class="col-md-4">
@@ -200,19 +213,16 @@ async def upload(file: UploadFile = File(...)):
 
         </div>
 
-        <!-- GRAPH -->
         <div class="card-box mt-4">
             <h3>📈 Segmentation Plot</h3>
             <img src="data:image/png;base64,{image_base64}" class="img-fluid">
         </div>
 
-        <!-- TABLE -->
         <div class="card-box">
             <h3>📊 Cluster Analysis</h3>
             {summary}
         </div>
 
-        <!-- INSIGHTS -->
         <div class="card-box">
             <h3>🎯 Insights</h3>
             <p>💰 Cluster <b>{high_spender}</b> → High Value Customers</p>
