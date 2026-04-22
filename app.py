@@ -16,26 +16,24 @@ app = FastAPI()
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse("""
-    <!DOCTYPE html>
     <html>
     <head>
         <title>SmartCart AI</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>
 
-    <body style="background: linear-gradient(to right, #1f4037, #99f2c8); color:white; text-align:center; padding-top:100px;">
+    <body style="background:#0f2027;color:white;text-align:center;padding-top:120px;">
 
-        <h1 style="font-size:50px;">🛒 SmartCart AI</h1>
-        <p style="font-size:20px;">AI-based Customer Segmentation System</p>
+        <h1 style="font-size:60px;">🛒 SmartCart AI</h1>
+        <p style="font-size:22px;">Customer Intelligence Platform</p>
 
         <form action="/upload" method="post" enctype="multipart/form-data">
             <input type="file" name="file" required class="form-control w-50 mx-auto">
             <br>
-            <button class="btn btn-primary btn-lg">Analyze Customers</button>
+            <button class="btn btn-success btn-lg">Analyze Customers</button>
         </form>
 
-        <br><br>
-        <p style="opacity:0.7;">Developed by Prince Singh</p>
+        <p style="margin-top:40px;opacity:0.6;">AI-powered decision system for modern businesses</p>
 
     </body>
     </html>
@@ -47,220 +45,206 @@ def home():
 async def upload(file: UploadFile = File(...)):
 
     try:
-        # 🔒 Safe file read
         contents = await file.read()
         df = pd.read_csv(BytesIO(contents))
 
         if df.empty:
-            return HTMLResponse("<h2>❌ Uploaded file is empty</h2>")
+            return HTMLResponse("<h2>❌ Empty file uploaded</h2>")
 
-        # 🔧 Preprocess (handles NaN + categorical)
         X_pca, df_processed = preprocess_data(df)
-
-        # 🤖 Clustering
         labels, best_k, score = run_clustering(X_pca)
-
-        if len(labels) != len(df_processed):
-            return HTMLResponse("<h2>❌ Label size mismatch</h2>")
 
         df_processed["Cluster"] = labels
 
-        # 📊 Summary
-        summary = df_processed.groupby("Cluster").mean().to_html(
-            classes="table table-dark table-hover table-bordered"
-        )
+        summary_df = df_processed.groupby("Cluster").mean()
 
-        # 📄 Data Preview (NEW)
-        preview = df_processed.head().to_html(
-            classes="table table-striped table-dark"
-        )
+        summary = summary_df.to_html(classes="table table-dark table-hover")
+        preview = df_processed.head().to_html(classes="table table-dark")
 
         # 📈 Plot
         plt.figure()
         plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
-        plt.title("Customer Segmentation")
-
         buffer = BytesIO()
         plt.savefig(buffer, format="png")
         buffer.seek(0)
         image_base64 = base64.b64encode(buffer.read()).decode()
 
-        # 🎯 Insights
-        insights = df_processed.groupby("Cluster").mean()
+        # ================= BUSINESS LOGIC ================= #
 
-        high_spender = insights["SpendingScore"].idxmax() if "SpendingScore" in insights.columns else "N/A"
-        low_spender = insights["SpendingScore"].idxmin() if "SpendingScore" in insights.columns else "N/A"
+        segment_cards = ""
 
-    except Exception:
-        # ✅ CLEAN UX ERROR PAGE
-        return HTMLResponse("""
-        <html>
-        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;font-family:sans-serif;">
-            <h2>⚠️ Invalid Dataset</h2>
+        for c in summary_df.index:
+            spend = summary_df.loc[c].get("SpendingScore", 0)
 
-            <p>Your file could not be processed.</p>
+            if spend > 70:
+                tag = "💎 High Value"
+                action = "Retain with premium experience & loyalty rewards"
+                color = "#00c6ff"
+            elif spend < 30:
+                tag = "⚠️ Low Value"
+                action = "Re-engage using discounts & campaigns"
+                color = "#ff4d4d"
+            else:
+                tag = "🛍️ Medium Value"
+                action = "Upsell and cross-sell products"
+                color = "#00c851"
 
-            <div style="max-width:500px;margin:auto;text-align:left;">
-                <ul>
-                    <li>✔ Upload CSV file only</li>
-                    <li>✔ Avoid too many missing values</li>
-                    <li>✔ Include numeric columns</li>
-                    <li>✔ Avoid empty dataset</li>
-                </ul>
+            segment_cards += f"""
+            <div class="col-md-4">
+                <div class="segment-card">
+                    <h4>Cluster {c}</h4>
+                    <h5 style="color:{color};">{tag}</h5>
+                    <p>Spending Score: {round(spend,1)}</p>
+                    <p><b>Action:</b> {action}</p>
+                </div>
             </div>
+            """
 
-            <br>
-            <a href="/" style="color:#00c6ff;font-size:18px;">⬅ Try Again</a>
+        # AI SUMMARY
+        ai_summary = f"""
+        <div class="card-box">
+        <h3>🧠 Executive Summary</h3>
+        <p>
+        Your customers are segmented into <b>{best_k}</b> groups.
+        High-value users drive revenue, while low-value users require activation strategies.
+        </p>
+        </div>
+        """
+
+        # RISK
+        if score < 0.3:
+            risk = "<span style='color:red;'>Weak segmentation</span>"
+        elif score < 0.5:
+            risk = "<span style='color:orange;'>Moderate segmentation</span>"
+        else:
+            risk = "<span style='color:lightgreen;'>Strong segmentation</span>"
+
+    except:
+        return HTMLResponse("""
+        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;">
+        <h2>Invalid Dataset</h2>
+        <a href="/">Go Back</a>
         </body>
-        </html>
         """)
 
     return HTMLResponse(f"""
-    <!DOCTYPE html>
     <html>
     <head>
-        <title>SmartCart Dashboard</title>
+        <title>Dashboard</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
         <style>
-            body {{
-                margin: 0;
-                font-family: 'Segoe UI', sans-serif;
-                background: #0f2027;
-                color: white;
-            }}
+        body {{
+            background:#0f2027;
+            color:white;
+            font-family:sans-serif;
+        }}
 
-            .sidebar {{
-                position: fixed;
-                height: 100%;
-                width: 220px;
-                background: #111;
-                padding-top: 30px;
-            }}
+        .main {{
+            padding:40px;
+        }}
 
-            .sidebar h2 {{
-                text-align: center;
-                margin-bottom: 30px;
-            }}
+        .kpi {{
+            background:#1c1c1c;
+            padding:25px;
+            border-radius:15px;
+            text-align:center;
+            transition:0.3s;
+        }}
 
-            .sidebar a {{
-                display: block;
-                padding: 15px;
-                color: white;
-                text-decoration: none;
-            }}
+        .kpi:hover {{
+            transform:scale(1.05);
+        }}
 
-            .sidebar a:hover {{
-                background: #00c6ff;
-            }}
+        .card-box {{
+            background:#1c1c1c;
+            padding:25px;
+            border-radius:15px;
+            margin-top:20px;
+        }}
 
-            .main {{
-                margin-left: 220px;
-                padding: 30px;
-            }}
+        .segment-card {{
+            background:#1c1c1c;
+            padding:20px;
+            border-radius:15px;
+            margin-top:15px;
+            text-align:center;
+            transition:0.3s;
+        }}
 
-            .card-box {{
-                background: #1c1c1c;
-                padding: 25px;
-                border-radius: 20px;
-                box-shadow: 0 0 25px rgba(0,0,0,0.6);
-                margin-bottom: 25px;
-            }}
+        .segment-card:hover {{
+            transform:translateY(-5px);
+        }}
 
-            .kpi-card {{
-                padding: 20px;
-                border-radius: 15px;
-                text-align: center;
-                box-shadow: 0 0 20px rgba(0,0,0,0.4);
-                transition: transform 0.3s ease;
-            }}
-
-            .kpi-card:hover {{
-                transform: translateY(-5px) scale(1.03);
-            }}
-
-            .kpi-blue {{
-                background: linear-gradient(135deg, #00c6ff, #0072ff);
-            }}
-
-            .kpi-green {{
-                background: linear-gradient(135deg, #00ff87, #60efff);
-            }}
-
-            .kpi-purple {{
-                background: linear-gradient(135deg, #a18cd1, #fbc2eb);
-            }}
+        h1 {{
+            font-weight:600;
+        }}
         </style>
     </head>
 
     <body>
 
-    <div class="sidebar">
-        <h2>🛒 SmartCart</h2>
-        <a href="/">🏠 Home</a>
-        <a href="#">📊 Dashboard</a>
-    </div>
-
     <div class="main">
 
-        <h1>📊 Analytics Dashboard</h1>
-        <p>Customer Segmentation Insights</p>
+        <h1>📊 SmartCart Business Dashboard</h1>
+        <p>AI-powered insights for business growth</p>
 
         <!-- KPI -->
         <div class="row mt-4">
 
             <div class="col-md-4">
-                <div class="kpi-card kpi-blue">
-                    <h5>👥 Total Customers</h5>
+                <div class="kpi">
+                    <h5>Customers</h5>
                     <h2>{len(df_processed)}</h2>
                 </div>
             </div>
 
             <div class="col-md-4">
-                <div class="kpi-card kpi-green">
-                    <h5>📊 Clusters</h5>
+                <div class="kpi">
+                    <h5>Segments</h5>
                     <h2>{best_k}</h2>
                 </div>
             </div>
 
             <div class="col-md-4">
-                <div class="kpi-card kpi-purple">
-                    <h5>🎯 Silhouette Score</h5>
-                    <h2>{round(score, 3)}</h2>
+                <div class="kpi">
+                    <h5>Model Quality</h5>
+                    <h2>{round(score,2)}</h2>
+                    <p>{risk}</p>
                 </div>
             </div>
 
         </div>
 
-        <!-- DATA PREVIEW -->
-        <div class="card-box mt-4">
+        {ai_summary}
+
+        <!-- GRAPH -->
+        <div class="card-box">
+            <h3>📈 Customer Segmentation</h3>
+            <img src="data:image/png;base64,{image_base64}" width="500">
+        </div>
+
+        <!-- DATA -->
+        <div class="card-box">
             <h3>📄 Data Preview</h3>
             {preview}
         </div>
 
-        <!-- GRAPH -->
+        <!-- SEGMENTS -->
         <div class="card-box">
-            <h3>📈 Segmentation Plot</h3>
-            <img src="data:image/png;base64,{image_base64}" class="img-fluid">
+            <h3>🎯 Customer Segments</h3>
+            <div class="row">
+                {segment_cards}
+            </div>
         </div>
 
         <!-- TABLE -->
         <div class="card-box">
-            <h3>📊 Cluster Analysis</h3>
+            <h3>📊 Detailed Analysis</h3>
             {summary}
         </div>
 
-        <!-- INSIGHTS -->
-        <div class="card-box">
-            <h3>🎯 Insights</h3>
-            <p>💰 Cluster <b>{high_spender}</b> → High Value Customers</p>
-            <p>📉 Cluster <b>{low_spender}</b> → Low Value Customers</p>
-        </div>
-
-        <a href="/" class="btn btn-light">⬅ Back</a>
-
-        <br><br>
-        <p style="opacity:0.6;">Developed by Prince Singh</p>
+        <a href="/" class="btn btn-light mt-3">⬅ Back</a>
 
     </div>
 
