@@ -12,7 +12,7 @@ from model import run_clustering
 app = FastAPI()
 
 
-# ✅ HOME PAGE (FIXED)
+# ✅ HOME PAGE
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse("""
@@ -42,32 +42,40 @@ def home():
     """)
 
 
-# ✅ RESULT PAGE (SAFE + FINAL)
+# ✅ RESULT PAGE
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(file: UploadFile = File(...)):
 
     try:
-        # ✅ SAFE FILE READ (important for deployment)
+        # 🔒 Safe file read
         contents = await file.read()
         df = pd.read_csv(BytesIO(contents))
 
-        # Preprocess
+        if df.empty:
+            return HTMLResponse("<h2>❌ Uploaded file is empty</h2>")
+
+        # 🔧 Preprocess (handles NaN + categorical)
         X_pca, df_processed = preprocess_data(df)
 
-        # Clustering
+        # 🤖 Clustering
         labels, best_k, score = run_clustering(X_pca)
 
         if len(labels) != len(df_processed):
-            return HTMLResponse("<h2>Error: Label size mismatch</h2>")
+            return HTMLResponse("<h2>❌ Label size mismatch</h2>")
 
         df_processed["Cluster"] = labels
 
-        # Table
+        # 📊 Summary
         summary = df_processed.groupby("Cluster").mean().to_html(
             classes="table table-dark table-hover table-bordered"
         )
 
-        # Graph
+        # 📄 Data Preview (NEW)
+        preview = df_processed.head().to_html(
+            classes="table table-striped table-dark"
+        )
+
+        # 📈 Plot
         plt.figure()
         plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
         plt.title("Customer Segmentation")
@@ -77,20 +85,32 @@ async def upload(file: UploadFile = File(...)):
         buffer.seek(0)
         image_base64 = base64.b64encode(buffer.read()).decode()
 
-        # Insights
+        # 🎯 Insights
         insights = df_processed.groupby("Cluster").mean()
 
         high_spender = insights["SpendingScore"].idxmax() if "SpendingScore" in insights.columns else "N/A"
         low_spender = insights["SpendingScore"].idxmin() if "SpendingScore" in insights.columns else "N/A"
 
-    except Exception as e:
-        return HTMLResponse(f"""
+    except Exception:
+        # ✅ CLEAN UX ERROR PAGE
+        return HTMLResponse("""
         <html>
-        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;">
-            <h2>⚠️ Error Processing File</h2>
-            <p>{str(e)}</p>
+        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;font-family:sans-serif;">
+            <h2>⚠️ Invalid Dataset</h2>
+
+            <p>Your file could not be processed.</p>
+
+            <div style="max-width:500px;margin:auto;text-align:left;">
+                <ul>
+                    <li>✔ Upload CSV file only</li>
+                    <li>✔ Avoid too many missing values</li>
+                    <li>✔ Include numeric columns</li>
+                    <li>✔ Avoid empty dataset</li>
+                </ul>
+            </div>
+
             <br>
-            <a href="/" style="color:white;">⬅ Go Back</a>
+            <a href="/" style="color:#00c6ff;font-size:18px;">⬅ Try Again</a>
         </body>
         </html>
         """)
@@ -150,7 +170,6 @@ async def upload(file: UploadFile = File(...)):
             .kpi-card {{
                 padding: 20px;
                 border-radius: 15px;
-                color: white;
                 text-align: center;
                 box-shadow: 0 0 20px rgba(0,0,0,0.4);
                 transition: transform 0.3s ease;
@@ -171,7 +190,6 @@ async def upload(file: UploadFile = File(...)):
             .kpi-purple {{
                 background: linear-gradient(135deg, #a18cd1, #fbc2eb);
             }}
-
         </style>
     </head>
 
@@ -188,6 +206,7 @@ async def upload(file: UploadFile = File(...)):
         <h1>📊 Analytics Dashboard</h1>
         <p>Customer Segmentation Insights</p>
 
+        <!-- KPI -->
         <div class="row mt-4">
 
             <div class="col-md-4">
@@ -213,16 +232,25 @@ async def upload(file: UploadFile = File(...)):
 
         </div>
 
+        <!-- DATA PREVIEW -->
         <div class="card-box mt-4">
+            <h3>📄 Data Preview</h3>
+            {preview}
+        </div>
+
+        <!-- GRAPH -->
+        <div class="card-box">
             <h3>📈 Segmentation Plot</h3>
             <img src="data:image/png;base64,{image_base64}" class="img-fluid">
         </div>
 
+        <!-- TABLE -->
         <div class="card-box">
             <h3>📊 Cluster Analysis</h3>
             {summary}
         </div>
 
+        <!-- INSIGHTS -->
         <div class="card-box">
             <h3>🎯 Insights</h3>
             <p>💰 Cluster <b>{high_spender}</b> → High Value Customers</p>
