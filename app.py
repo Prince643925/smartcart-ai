@@ -12,7 +12,7 @@ from model import run_clustering
 app = FastAPI()
 
 
-# ✅ HOME ROUTE (FIXES 404)
+# ✅ HOME PAGE
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse("""
@@ -42,7 +42,7 @@ def home():
     """)
 
 
-# ✅ ONLY ONE UPLOAD ROUTE (VERY IMPORTANT)
+# ✅ RESULT PAGE
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(file: UploadFile = File(...)):
 
@@ -51,25 +51,20 @@ async def upload(file: UploadFile = File(...)):
     # Preprocess
     X_pca, df_processed = preprocess_data(df)
 
-    # ✅ FIXED: unpack 3 values correctly
+    # Clustering
     labels, best_k, score = run_clustering(X_pca)
 
-    # ✅ DEBUG (check lengths)
-    print("Rows:", len(df_processed))
-    print("Labels:", len(labels))
-
-    # ✅ IMPORTANT FIX (prevents mismatch error)
     if len(labels) != len(df_processed):
-        return HTMLResponse("<h2>Error: Label size mismatch. Check preprocessing.</h2>")
+        return HTMLResponse("<h2>Error: Label size mismatch</h2>")
 
     df_processed["Cluster"] = labels
 
-    # 📊 Table
+    # Table
     summary = df_processed.groupby("Cluster").mean().to_html(
         classes="table table-dark table-hover table-bordered"
     )
 
-    # 📈 Graph
+    # Graph
     plt.figure()
     plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
     plt.title("Customer Segmentation")
@@ -79,7 +74,7 @@ async def upload(file: UploadFile = File(...)):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.read()).decode()
 
-    # 🎯 Insights
+    # Insights
     insights = df_processed.groupby("Cluster").mean()
 
     high_spender = insights["SpendingScore"].idxmax() if "SpendingScore" in insights.columns else "N/A"
@@ -131,17 +126,38 @@ async def upload(file: UploadFile = File(...)):
 
             .card-box {{
                 background: #1c1c1c;
-                padding: 20px;
-                border-radius: 15px;
-                margin-bottom: 20px;
+                padding: 25px;
+                border-radius: 20px;
+                box-shadow: 0 0 25px rgba(0,0,0,0.6);
+                margin-bottom: 25px;
             }}
 
-            .metric {{
-                text-align: center;
+            /* KPI CARDS */
+            .kpi-card {{
                 padding: 20px;
-                border-radius: 10px;
+                border-radius: 15px;
+                color: white;
+                text-align: center;
+                box-shadow: 0 0 20px rgba(0,0,0,0.4);
+                transition: transform 0.3s ease;
+            }}
+
+            .kpi-card:hover {{
+                transform: translateY(-5px) scale(1.03);
+            }}
+
+            .kpi-blue {{
                 background: linear-gradient(135deg, #00c6ff, #0072ff);
             }}
+
+            .kpi-green {{
+                background: linear-gradient(135deg, #00ff87, #60efff);
+            }}
+
+            .kpi-purple {{
+                background: linear-gradient(135deg, #a18cd1, #fbc2eb);
+            }}
+
         </style>
     </head>
 
@@ -156,46 +172,51 @@ async def upload(file: UploadFile = File(...)):
     <div class="main">
 
         <h1>📊 Analytics Dashboard</h1>
+        <p>Customer Segmentation Insights</p>
 
+        <!-- ✅ KPI CARDS -->
         <div class="row mt-4">
 
             <div class="col-md-4">
-                <div class="metric">
-                    <p>Clusters</p>
+                <div class="kpi-card kpi-blue">
+                    <h5>👥 Total Customers</h5>
+                    <h2>{len(df_processed)}</h2>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="kpi-card kpi-green">
+                    <h5>📊 Clusters</h5>
                     <h2>{best_k}</h2>
                 </div>
             </div>
 
             <div class="col-md-4">
-                <div class="metric">
-                    <p>Silhouette</p>
-                    <h2>{round(score,3)}</h2>
-                </div>
-            </div>
-
-            <div class="col-md-4">
-                <div class="metric">
-                    <p>Customers</p>
-                    <h2>{len(df_processed)}</h2>
+                <div class="kpi-card kpi-purple">
+                    <h5>🎯 Silhouette Score</h5>
+                    <h2>{round(score, 3)}</h2>
                 </div>
             </div>
 
         </div>
 
+        <!-- GRAPH -->
         <div class="card-box mt-4">
             <h3>📈 Segmentation Plot</h3>
             <img src="data:image/png;base64,{image_base64}" class="img-fluid">
         </div>
 
+        <!-- TABLE -->
         <div class="card-box">
             <h3>📊 Cluster Analysis</h3>
             {summary}
         </div>
 
+        <!-- INSIGHTS -->
         <div class="card-box">
             <h3>🎯 Insights</h3>
-            <p>💰 Cluster <b>{high_spender}</b> → High Value</p>
-            <p>📉 Cluster <b>{low_spender}</b> → Low Value</p>
+            <p>💰 Cluster <b>{high_spender}</b> → High Value Customers</p>
+            <p>📉 Cluster <b>{low_spender}</b> → Low Value Customers</p>
         </div>
 
         <a href="/" class="btn btn-light">⬅ Back</a>
