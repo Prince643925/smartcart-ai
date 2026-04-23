@@ -1,253 +1,553 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse
-
+from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 import pandas as pd
-import matplotlib.pyplot as plt
-import base64
-from io import BytesIO
+import numpy as np
+import os
+import uuid
 
-from preprocess import preprocess_data
-from model import run_clustering
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
+SESSION_STORE = {}
 
-# ✅ HOME PAGE
+# ================= GPT ================= #
+def get_gpt_insights(summary):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": f"Explain this segmentation:\n{summary}"}]
+        )
+        return response.choices[0].message.content
+    except:
+        return "AI insights unavailable"
+
+
+# ================= HOME ================= #
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse("""
-    <html>
-    <head>
-        <title>SmartCart AI</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
+<html>
+<head>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
-    <body style="background:#0f2027;color:white;text-align:center;padding-top:120px;">
+<style>
+body {
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+    color: white;
+    font-family: 'Segoe UI', sans-serif;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
 
-        <h1 style="font-size:60px;">🛒 SmartCart AI</h1>
-        <p style="font-size:22px;">Customer Intelligence Platform</p>
+.container-box {
+    text-align: center;
+    max-width: 700px;
+    width: 100%;
+}
+
+.title {
+    font-size: 60px;
+    font-weight: bold;
+}
+
+.subtitle {
+    color: #b0bec5;
+    margin-bottom: 30px;
+}
+
+.upload-box {
+    background: #1c1c1c;
+    padding: 20px;
+    border-radius: 15px;
+}
+
+input[type="file"] {
+    background: #2a2a2a;
+    color: white;
+    border: none;
+}
+
+.btn-analyze {
+    background: #00c6ff;
+    border: none;
+    padding: 12px 30px;
+    font-size: 18px;
+    border-radius: 10px;
+}
+
+.btn-analyze:hover {
+    background: #00a6d6;
+}
+
+/* 🔄 FLOAT ANIMATION */
+@keyframes float {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+    100% { transform: translateY(0px); }
+}
+
+/* ✨ GLOW EFFECT */
+.logo {
+    animation: float 3s ease-in-out infinite;
+    filter: drop-shadow(0 0 10px rgba(0,198,255,0.6));
+    transition: 0.3s;
+}
+
+/* 🔥 HOVER EFFECT */
+.logo:hover {
+    filter: drop-shadow(0 0 20px rgba(0,198,255,1));
+    transform: scale(1.1);
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="container-box">
+    <img src="https://cdn-icons-png.flaticon.com/512/4712/4712109.png" width="90" class="logo" style="margin-bottom:20px;">
+
+    <div class="title">🛒 SmartCart AI</div>
+    <div class="subtitle">Customer Intelligence Platform</div>
+
+    <div class="upload-box">
 
         <form action="/upload" method="post" enctype="multipart/form-data">
-            <input type="file" name="file" required class="form-control w-50 mx-auto">
-            <br>
-            <button class="btn btn-success btn-lg">Analyze Customers</button>
+            
+            <input type="file" name="file" required class="form-control mb-3">
+            
+            <button class="btn btn-analyze">🚀 Analyze Customers</button>
+
         </form>
 
-        <p style="margin-top:40px;opacity:0.6;">AI-powered decision system for modern businesses</p>
+    </div>
 
-    </body>
-    </html>
-    """)
+    <p class="mt-4 text-secondary">
+        AI-powered decision system for modern businesses
+    </p>
+
+    <p class="mt-1" style="font-size:14px; color:#90caf9;">
+        Developed by Prince Kumar(23ERACS211) & Prince Kumar(22ERACS028) 🚀
+
+</div>
+
+</body>
+</html>
+""")
 
 
-# ✅ RESULT PAGE
+# ================= UPLOAD ================= #
 @app.post("/upload", response_class=HTMLResponse)
-async def upload(file: UploadFile = File(...)):
-
+async def upload(
+    request: Request,
+    file: UploadFile = File(None),
+    columns: list[str] = Form(None)
+):
     try:
-        contents = await file.read()
-        df = pd.read_csv(BytesIO(contents))
+        session_id = request.cookies.get("session_id")
 
-        if df.empty:
-            return HTMLResponse("<h2>❌ Empty file uploaded</h2>")
+        if file:
+            df = pd.read_csv(file.file)
+            session_id = str(uuid.uuid4())
+            SESSION_STORE[session_id] = df
+        elif session_id in SESSION_STORE:
+            df = SESSION_STORE[session_id]
+        else:
+            return RedirectResponse(url="/", status_code=303)
 
-        X_pca, df_processed = preprocess_data(df)
-        labels, best_k, score = run_clustering(X_pca)
+        df.columns = df.columns.str.lower()
+        numeric_df = df.select_dtypes(include=["number"])
 
-        df_processed["Cluster"] = labels
+        all_cols = list(numeric_df.columns)
 
-        summary_df = df_processed.groupby("Cluster").mean()
+        selected_cols = columns if columns else all_cols
 
-        summary = summary_df.to_html(classes="table table-dark table-hover")
-        preview = df_processed.head().to_html(classes="table table-dark")
+        if len(selected_cols) < 2:
+            return HTMLResponse("<h2 style='color:white'>⚠️ Select at least 2 columns</h2>")
 
-        # 📈 Plot
-        plt.figure()
-        plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels)
-        buffer = BytesIO()
-        plt.savefig(buffer, format="png")
-        buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.read()).decode()
+        numeric_df = numeric_df[selected_cols]
+        numeric_df = numeric_df.fillna(numeric_df.mean())
 
-        # ================= BUSINESS LOGIC ================= #
+
+        # ================= FEATURE ENGINEERING (ADD HERE) ================= #
+        from datetime import datetime
+
+        today = datetime.now()
+        if "date" in df.columns:
+            df["recency"] = (today - pd.to_datetime(df["date"])).dt.days
+        else:
+            df["recency"] = np.random.randint(1, 100, size=len(df))
+        
+        df["total_spent"] = df["annualincome"] * np.random.uniform(0.1, 0.5, size=len(df))
+        df["avg_purchase"] = df["total_spent"] / (df["frequency"] + 1)
+
+        # Also add to numeric_df (IMPORTANT)
+        numeric_df["recency"] = df["recency"]
+        numeric_df["total_spent"] = df["total_spent"]
+        numeric_df["avg_purchase"] = df["avg_purchase"]
+
+        # ================= CUSTOMER VALUE SCORE ================= #
+        if "frequency" in numeric_df.columns:
+            numeric_df["engagement_score"] = numeric_df["frequency"] * numeric_df["spendingscore"]
+        else:
+            numeric_df["engagement_score"] = numeric_df["spendingscore"]
+        
+        spending = numeric_df["spendingscore"] / numeric_df["spendingscore"].max()
+        income = numeric_df["annualincome"] / numeric_df["annualincome"].max()
+        
+        # If frequency not present → assume default (or create)
+        if "frequency" in numeric_df.columns:
+            frequency = numeric_df["frequency"] / numeric_df["frequency"].max()
+        else:
+            frequency = 0.5  # fallback
+
+        # Final score
+        recency_norm = 1 - (numeric_df["recency"] / numeric_df["recency"].max())
+
+        numeric_df["value_score"] = (
+            0.25 * spending +
+            0.2 * income +
+            0.25 * frequency +
+            0.15 * recency_norm +
+            0.15 * (numeric_df["engagement_score"] / numeric_df["engagement_score"].max())
+        )
+
+        scaler = StandardScaler()
+        X = scaler.fit_transform(numeric_df)
+
+        best_score = -1
+        best_labels = None
+        best_k = 2
+
+        for k in range(2, min(10, len(X))):
+            km = KMeans(n_clusters=k, random_state=42)
+            labels = km.fit_predict(X)
+
+            if len(set(labels)) > 1:
+                score = silhouette_score(X, labels)
+                if score > best_score:
+                    best_score = score
+                    best_k = k
+                    best_labels = labels
+
+        df["cluster"] = best_labels
+        df["value_score"] = numeric_df["value_score"]
+        summary_df = df.groupby("cluster").mean(numeric_only=True)
+
+        
+
+        gpt_text = get_gpt_insights(summary_df.to_string())
+
+        # PCA SAFE
+        if X.shape[1] >= 2:
+            X_vis = PCA(n_components=2).fit_transform(X)
+        else:
+            X_vis = np.column_stack((X[:, 0], np.zeros(len(X))))
+
+        # ================= SEGMENTS ================= #
+        segment_cards = ""
+
+        # ✅ choose smart column
+        target_col = "value_score"
+
+        values = summary_df[target_col]
+
+        # percentile-based segmentation (always balanced)
+        low_th = values.quantile(0.33)
+        high_th = values.quantile(0.66)
+
+
+        segments = {
+            "💎 VIP Customers": [],
+            "🛍️ Regular Customers": [],
+            "⚠️ At Risk Customers": []
+        }
+
+        for c in summary_df.index:
+            spend = summary_df.loc[c][target_col]
+
+            if spend >= high_th:
+                segments["💎 VIP Customers"].append(c)
+
+            elif spend <= low_th:
+                segments["⚠️ At Risk Customers"].append(c)
+
+            else:
+                segments["🛍️ Regular Customers"].append(c)
+                
 
         segment_cards = ""
 
-        for c in summary_df.index:
-            spend = summary_df.loc[c].get("SpendingScore", 0)
+        for tag, cluster_list in segments.items():
 
-            if spend > 70:
-                tag = "💎 High Value"
-                action = "Retain with premium experience & loyalty rewards"
+            if not cluster_list:
+                continue
+
+            if "VIP" in tag:
                 color = "#00c6ff"
-            elif spend < 30:
-                tag = "⚠️ Low Value"
-                action = "Re-engage using discounts & campaigns"
+                action = "Focus on retention, loyalty programs & premium experience"
+
+            elif "Risk" in tag:
                 color = "#ff4d4d"
+                action = "Run discounts, re-engagement campaigns"
+
             else:
-                tag = "🛍️ Medium Value"
-                action = "Upsell and cross-sell products"
                 color = "#00c851"
+                action = "Upsell & cross-sell opportunities"
+
+        
 
             segment_cards += f"""
             <div class="col-md-4">
-                <div class="segment-card">
-                    <h4>Cluster {c}</h4>
-                    <h5 style="color:{color};">{tag}</h5>
-                    <p>Spending Score: {round(spend,1)}</p>
+                <div class="card p-3">
+                    <h4>{tag}</h4>
+                    <p><b>Clusters:</b> {cluster_list}</p>
                     <p><b>Action:</b> {action}</p>
                 </div>
             </div>
             """
 
-        # AI SUMMARY
-        ai_summary = f"""
-        <div class="card-box">
-        <h3>🧠 Executive Summary</h3>
-        <p>
-        Your customers are segmented into <b>{best_k}</b> groups.
-        High-value users drive revenue, while low-value users require activation strategies.
-        </p>
-        </div>
-        """
 
-        # RISK
-        if score < 0.3:
-            risk = "<span style='color:red;'>Weak segmentation</span>"
-        elif score < 0.5:
-            risk = "<span style='color:orange;'>Moderate segmentation</span>"
-        else:
-            risk = "<span style='color:lightgreen;'>Strong segmentation</span>"
+        preview = df.head().to_html(classes="table table-dark")
+        score = round(best_score, 2)
 
-    except:
-        return HTMLResponse("""
-        <body style="background:#0f2027;color:white;text-align:center;padding-top:100px;">
-        <h2>Invalid Dataset</h2>
-        <a href="/">Go Back</a>
-        </body>
-        """)
+        # ================= CHART DATA ================= #
+        # Bar chart (avg value_score per cluster)
+        bar_x = summary_df.index.tolist()
+        bar_y = summary_df[target_col].tolist()
 
-    return HTMLResponse(f"""
-    <html>
-    <head>
-        <title>Dashboard</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        # Pie chart (cluster distribution)
+        cluster_counts = df["cluster"].value_counts().sort_index()
+        pie_labels = cluster_counts.index.tolist()
+        pie_values = cluster_counts.values.tolist()
 
-        <style>
-        body {{
-            background:#0f2027;
-            color:white;
-            font-family:sans-serif;
-        }}
 
-        .main {{
-            padding:40px;
-        }}
+        # Trend (if time column exists)
+        trend_x = []
+        trend_y = []
 
-        .kpi {{
-            background:#1c1c1c;
-            padding:25px;
-            border-radius:15px;
-            text-align:center;
-            transition:0.3s;
-        }}
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            trend_df = df.groupby("date")[target_col].mean()
+            trend_x = trend_df.index.astype(str).tolist()
+            trend_y = trend_df.values.tolist()
 
-        .kpi:hover {{
-            transform:scale(1.05);
-        }}
+    except Exception as e:
+        return HTMLResponse(f"<h2 style='color:white'>Error: {e}</h2>")
 
-        .card-box {{
-            background:#1c1c1c;
-            padding:25px;
-            border-radius:15px;
-            margin-top:20px;
-        }}
+    response = HTMLResponse(f"""
+<html>
+<head>
 
-        .segment-card {{
-            background:#1c1c1c;
-            padding:20px;
-            border-radius:15px;
-            margin-top:15px;
-            text-align:center;
-            transition:0.3s;
-        }}
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 
-        .segment-card:hover {{
-            transform:translateY(-5px);
-        }}
+<style>
+body {{
+    background:#0f2027;
+    color:#ffffff;
+    font-family: 'Segoe UI', sans-serif;
+}}
 
-        h1 {{
-            font-weight:600;
-        }}
-        </style>
-    </head>
+.card {{
+    background:#1c1c1c;
+    margin-top:20px;
+    padding:20px;
+    border-radius:15px;
+    color:#ffffff;
+}}
 
-    <body>
+h1, h2, h3, h4, h5 {{
+    color:#ffffff;
+}}
 
-    <div class="main">
+.table {{
+    color:#ffffff !important;
+}}
 
-        <h1>📊 SmartCart Business Dashboard</h1>
-        <p>AI-powered insights for business growth</p>
+.table th {{
+    color:#00c6ff !important;
+    background:#111 !important;
+}}
 
-        <!-- KPI -->
-        <div class="row mt-4">
+.table td {{
+    color:#e6e6e6 !important;
+}}
 
-            <div class="col-md-4">
-                <div class="kpi">
-                    <h5>Customers</h5>
-                    <h2>{len(df_processed)}</h2>
-                </div>
-            </div>
+.table-dark {{
+    background:#1c1c1c !important;
+}}
 
-            <div class="col-md-4">
-                <div class="kpi">
-                    <h5>Segments</h5>
-                    <h2>{best_k}</h2>
-                </div>
-            </div>
+select {{
+    background:#1c1c1c !important;
+    color:white !important;
+    border:1px solid #444 !important;
+}}
 
-            <div class="col-md-4">
-                <div class="kpi">
-                    <h5>Model Quality</h5>
-                    <h2>{round(score,2)}</h2>
-                    <p>{risk}</p>
-                </div>
-            </div>
+option {{
+    background:#1c1c1c;
+    color:white;
+}}
 
-        </div>
+.btn-info {{
+    background:#00c6ff;
+    border:none;
+}}
 
-        {ai_summary}
+.btn-light {{
+    background:#e6e6e6;
+    color:black;
+}}
 
-        <!-- GRAPH -->
-        <div class="card-box">
-            <h3>📈 Customer Segmentation</h3>
-            <img src="data:image/png;base64,{image_base64}" width="500">
-        </div>
+#chart {{
+    background:#1c1c1c;
+}}
+</style>
 
-        <!-- DATA -->
-        <div class="card-box">
-            <h3>📄 Data Preview</h3>
-            {preview}
-        </div>
+</head>
 
-        <!-- SEGMENTS -->
-        <div class="card-box">
-            <h3>🎯 Customer Segments</h3>
-            <div class="row">
-                {segment_cards}
-            </div>
-        </div>
+<body>
 
-        <!-- TABLE -->
-        <div class="card-box">
-            <h3>📊 Detailed Analysis</h3>
-            {summary}
-        </div>
+<div class="container mt-5">
 
-        <a href="/" class="btn btn-light mt-3">⬅ Back</a>
+<h1>📊 SmartCart Business Dashboard</h1>
 
+<div class="row">
+    <div class="col-md-4"><div class="card">Customers<br><h2>{len(df)}</h2></div></div>
+    <div class="col-md-4"><div class="card">Segments<br><h2>{best_k}</h2></div></div>
+    <div class="col-md-4"><div class="card">Model Quality<br><h2>{score}</h2></div></div>
+</div>
+
+<div class="card">
+<h3>🧠 Executive Summary</h3>
+<p>Your customers are segmented into {best_k} groups.</p>
+</div>
+
+<div class="row">
+
+    <div class="col-md-6">
+        <div id="scatter" class="card"></div>
     </div>
 
-    </body>
-    </html>
-    """)
+    <div class="col-md-6">
+        <div id="bar" class="card"></div>
+    </div>
+
+</div>
+
+<div class="row mt-3">
+
+    <div class="col-md-6">
+        <div id="pie" class="card"></div>
+    </div>
+
+    <div class="col-md-6">
+        <div id="trend" class="card"></div>
+    </div>
+
+</div>
+
+<script>
+
+// SCATTER
+Plotly.newPlot('scatter', [{{
+    x: {X_vis[:,0].tolist()},
+    y: {X_vis[:,1].tolist()},
+    mode: 'markers',
+    marker: {{
+        color: {best_labels.tolist()},
+        colorscale: 'Viridis',
+        size:10
+    }}
+}}], {{
+    title: "Customer Clusters",
+    paper_bgcolor: '#1c1c1c',
+    plot_bgcolor: '#1c1c1c',
+    font: {{ color: '#ffffff' }}
+}});
+
+// BAR
+Plotly.newPlot('bar', [{{
+    x: {bar_x},
+    y: {bar_y},
+    type: 'bar'
+}}], {{
+    title: "Avg Value Score",
+    paper_bgcolor: '#1c1c1c',
+    plot_bgcolor: '#1c1c1c',
+    font: {{ color: '#ffffff' }}
+}});
+
+// PIE
+Plotly.newPlot('pie', [{{
+    labels: {pie_labels},
+    values: {pie_values},
+    type: 'pie'
+}}], {{
+    title: "Customer Distribution",
+    paper_bgcolor: '#1c1c1c',
+    font: {{ color: '#ffffff' }}
+}});
+
+// TREND
+Plotly.newPlot('trend', [{{
+    x: {trend_x},
+    y: {trend_y},
+    mode: 'lines+markers'
+}}], {{
+    title: "Customer Trend",
+    paper_bgcolor: '#1c1c1c',
+    plot_bgcolor: '#1c1c1c',
+    font: {{ color: '#ffffff' }}
+}});
+
+</script>
+
+<div class="card">
+<h3>📄 Data Preview</h3>
+{preview}
+</div>
+
+<div class="card">
+<h3>🎯 Customer Segments</h3>
+<div class="row">
+{segment_cards}
+</div>
+</div>
+
+<div class="card">
+<h3>📊 Detailed Analysis</h3>
+{summary_df.to_html(classes="table table-dark")}
+</div>
+
+<div class="card">
+<form method="post" action="/upload">
+<select name="columns" multiple class="form-control">
+{"".join([f'<option value="{c}" selected>{c}</option>' for c in all_cols])}
+</select>
+<button class="btn btn-info mt-2">Apply Filter</button>
+</form>
+</div>
+
+<a href="/" class="btn btn-light mt-3">Reset</a>
+
+<p class="text-center mt-4" style="font-size:13px; color:#90caf9;">
+    Developed by Prince Kumar(23ERACS211) & Prince Kumar(22ERACS028) 🚀
+
+</div>
+</body>
+</html>
+""")
+
+    response.set_cookie("session_id", session_id)
+    return response
