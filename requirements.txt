@@ -1,4 +1,10 @@
-fastapi
+fastapi==0.110.0
+uvicorn==0.29.0
+pandas
+numpy
+scikit-learn
+openai
+python-multipart==0.0.9fastapi
 uvicorn
 pandas
 numpy
