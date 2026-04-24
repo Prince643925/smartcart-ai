@@ -1,4 +1,10 @@
 fastapi
+uvicorn
+pandas
+numpy
+scikit-learn
+openai
+python-multipartfastapi
 
 uvicorn
 

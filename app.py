@@ -165,8 +165,45 @@ async def upload(
         else:
             return RedirectResponse(url="/", status_code=303)
 
-        df.columns = df.columns.str.lower()
+        df.columns = (
+            df.columns
+            .str.strip()
+            .str.lower()
+            .str.replace(" ", "")
+            .str.replace("_", "")
+        )
+
+        column_map = {
+            "annualincome": ["annualincome", "income", "salary", "earnings"],
+            "spendingscore": ["spendingscore", "spending", "score"],
+            "frequency": ["frequency", "freq", "transactions", "purchases"],
+            "date": ["date", "transactiondate", "orderdate"]
+        }
+
+        # Apply mapping
+        for standard, variations in column_map.items():
+            for col in df.columns:
+                if col in variations:
+                    df.rename(columns={col: standard}, inplace=True)
+
+        # ================= SAFE COLUMN GUARANTEE ================= #
+        def safe_column(col, low, high):
+            if col not in df.columns:
+                df[col] = np.random.randint(low, high, size=len(df))
+
+        safe_column("annualincome", 20, 100)
+        safe_column("spendingscore", 1, 100)
+        safe_column("frequency", 1, 10)
+
+        # Convert all numeric safely
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            
+            
         numeric_df = df.select_dtypes(include=["number"])
+
+        if numeric_df.shape[1] == 0:
+            return HTMLResponse("<h2 style='color:white'>❌ No numeric data found in CSV</h2>")
 
         all_cols = list(numeric_df.columns)
 
@@ -176,7 +213,7 @@ async def upload(
             return HTMLResponse("<h2 style='color:white'>⚠️ Select at least 2 columns</h2>")
 
         numeric_df = numeric_df[selected_cols]
-        numeric_df = numeric_df.fillna(numeric_df.mean())
+        numeric_df = numeric_df.fillna(0)
 
 
         # ================= FEATURE ENGINEERING (ADD HERE) ================= #
@@ -184,12 +221,17 @@ async def upload(
 
         today = datetime.now()
         if "date" in df.columns:
-            df["recency"] = (today - pd.to_datetime(df["date"])).dt.days
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["recency"] = (today - df["date"]).dt.days.fillna(0)
         else:
-            df["recency"] = np.random.randint(1, 100, size=len(df))
+             df["recency"] = np.random.randint(1, 100, size=len(df))
         
         df["total_spent"] = df["annualincome"] * np.random.uniform(0.1, 0.5, size=len(df))
-        df["avg_purchase"] = df["total_spent"] / (df["frequency"] + 1)
+
+        if "frequency" in df.columns:
+            df["avg_purchase"] = df["total_spent"] / (df["frequency"] + 1)
+        else:
+            df["avg_purchase"] = df["total_spent"]
 
         # Also add to numeric_df (IMPORTANT)
         numeric_df["recency"] = df["recency"]
@@ -197,30 +239,41 @@ async def upload(
         numeric_df["avg_purchase"] = df["avg_purchase"]
 
         # ================= CUSTOMER VALUE SCORE ================= #
-        if "frequency" in numeric_df.columns:
+        if "frequency" in numeric_df.columns and "spendingscore" in numeric_df.columns:
             numeric_df["engagement_score"] = numeric_df["frequency"] * numeric_df["spendingscore"]
-        else:
+        elif "spendingscore" in numeric_df.columns:
             numeric_df["engagement_score"] = numeric_df["spendingscore"]
-        
-        spending = numeric_df["spendingscore"] / numeric_df["spendingscore"].max()
-        income = numeric_df["annualincome"] / numeric_df["annualincome"].max()
-        
-        # If frequency not present → assume default (or create)
-        if "frequency" in numeric_df.columns:
-            frequency = numeric_df["frequency"] / numeric_df["frequency"].max()
         else:
-            frequency = 0.5  # fallback
+            numeric_df["engagement_score"] = np.ones(len(numeric_df))
+        
 
-        # Final score
-        recency_norm = 1 - (numeric_df["recency"] / numeric_df["recency"].max())
+        eng_max = numeric_df["engagement_score"].max() or 1
+        engagement_norm = numeric_df["engagement_score"] / eng_max
+
+        spending_max = numeric_df["spendingscore"].max() or 1
+        income_max = numeric_df["annualincome"].max() or 1
+
+        spending = numeric_df["spendingscore"] / spending_max
+        income = numeric_df["annualincome"] / income_max
+
+        
+        if "frequency" in numeric_df.columns:
+            frequency = numeric_df["frequency"] / (numeric_df["frequency"].max() or 1)
+        else:
+            frequency = 0.5
+
+        recency_max = numeric_df["recency"].max() or 1
+        recency_norm = 1 - (numeric_df["recency"] / recency_max)
+
 
         numeric_df["value_score"] = (
             0.25 * spending +
             0.2 * income +
             0.25 * frequency +
             0.15 * recency_norm +
-            0.15 * (numeric_df["engagement_score"] / numeric_df["engagement_score"].max())
+            0.15 * engagement_norm
         )
+
 
         scaler = StandardScaler()
         X = scaler.fit_transform(numeric_df)
@@ -229,7 +282,7 @@ async def upload(
         best_labels = None
         best_k = 2
 
-        for k in range(2, min(10, len(X))):
+        for k in range(2, min(6, max(3, len(X)//2))):
             km = KMeans(n_clusters=k, random_state=42)
             labels = km.fit_predict(X)
 
@@ -239,6 +292,9 @@ async def upload(
                     best_score = score
                     best_k = k
                     best_labels = labels
+
+        if best_labels is None:
+            best_labels = np.zeros(len(X), dtype=int)
 
         df["cluster"] = best_labels
         df["value_score"] = numeric_df["value_score"]
@@ -343,7 +399,9 @@ async def upload(
             trend_y = trend_df.values.tolist()
 
     except Exception as e:
-        return HTMLResponse(f"<h2 style='color:white'>Error: {e}</h2>")
+        print("🔥 ERROR:", e)
+        raise e
+
 
     response = HTMLResponse(f"""
 <html>
