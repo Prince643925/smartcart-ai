@@ -62,3 +62,10 @@ threadpoolctl==3.6.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 uvicorn==0.45.0
+fastapi==0.110.0
+uvicorn==0.29.0
+pandas
+numpy
+scikit-learn
+openai
+python-multipart==0.0.6
